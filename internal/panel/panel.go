@@ -332,9 +332,17 @@ func (p *Panel) requestLogs(w http.ResponseWriter, r *http.Request) {
 		limit = 1000
 	}
 	q := r.URL.Query()
+	// account 过滤：面板下拉传的是 uid，而归档里存的是昵称（展示口径），
+	// 这里做一次 uid→昵称翻译；传昵称/片段时保持原有包含匹配语义。
+	account := q.Get("account")
+	if account != "" {
+		if nk := p.nicknames()[account]; nk != "" {
+			account = nk
+		}
+	}
 	rows, err := p.cfg.RequestLog.ReadArchive(limit, reqlog.Filter{
 		Outcome:   q.Get("outcome"),
-		Account:   q.Get("account"),
+		Account:   account,
 		Model:     q.Get("model"),
 		ClientIP:  q.Get("client_ip"),
 		UserAgent: q.Get("user_agent"),
@@ -372,17 +380,27 @@ func (p *Panel) creditHistory(w http.ResponseWriter, r *http.Request) {
 		limit = 1000
 	}
 	uid := r.URL.Query().Get("uid")
+	// 时间筛选用秒级时间戳（前端按浏览器本地时区算好区间再传，避免服务端时区
+	// 与浏览器不一致时把"今天"切错日子）；空值表示不限。
+	from := parseTimeParam(r.URL.Query().Get("from"))
+	to := parseTimeParam(r.URL.Query().Get("to"))
 	nicks := p.nicknames()
-	// 有 uid 过滤时必须先全量取回（账本上限默认 2000 条）：先截断再过滤会让
+	// 有筛选条件时必须先全量取回（账本上限默认 2000 条）：先截断再过滤会让
 	// 筛选后的条数看起来像历史缺失。无过滤时只取 limit 条，不为一次展示拷贝整个账本。
 	readLimit := limit
-	if uid != "" {
+	if uid != "" || !from.IsZero() || !to.IsZero() {
 		readLimit = 0
 	}
 	all := p.cfg.CreditHistory.Read(readLimit)
 	out := make([]map[string]any, 0, limit)
 	for _, e := range all {
 		if uid != "" && e.UID != uid {
+			continue
+		}
+		if !from.IsZero() && e.Time.Before(from) {
+			continue
+		}
+		if !to.IsZero() && e.Time.After(to) {
 			continue
 		}
 		out = append(out, map[string]any{

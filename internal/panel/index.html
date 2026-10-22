@@ -1176,6 +1176,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <option value="stream_error">流错误</option>
             <option value="interrupted">中断</option>
           </select>
+          <select id="reqAccount" aria-label="按账号筛选">
+            <option value="">全部账号</option>
+          </select>
           <span class="trange" id="reqRange"></span>
           <select id="reqLimit" aria-label="读取条数">
             <option value="100" selected>最近 100 条</option>
@@ -1221,6 +1224,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <span class="note" id="creditNote">—</span>
         </header>
         <div class="fbar">
+          <select id="creditAccount" aria-label="按账号筛选">
+            <option value="">全部账号</option>
+          </select>
+          <span class="trange" id="creditRange"></span>
           <select id="creditLimit" aria-label="读取条数">
             <option value="100" selected>最近 100 条</option>
             <option value="300">最近 300 条</option>

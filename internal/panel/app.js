@@ -13,7 +13,7 @@ let refTimer = null;
 let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'default' };
 let mdAll = [], mdProbes = {}, mdProbeOf = () => undefined;
 let mdLocks = [], mdRecent = [];
-let reqFilter = { q: '', outcome: '' };
+let reqFilter = { q: '', outcome: '', accountName: '' };
 let reqEntries = [];
 let usDim = 'account', usCreditDim = 'account', usSort = 'total';
 let usageData = null;
@@ -525,6 +525,7 @@ async function loadOverview(quiet) {
     const up = Math.floor(d.uptime_sec);
     $('subMeta').textContent = '运行 ' + (up >= 86400 ? Math.floor(up / 86400) + ' 天 ' : '') + Math.floor(up % 86400 / 3600) + ' 时 ' + Math.floor(up % 3600 / 60) + ' 分';
     renderAccounts(d.accounts || []);
+    ensureAccountSelects();
     renderModelLocks(d.model_locks);
     // 到期卡片跟随首页统计同步刷新（用同一份响应里的按日批次，不额外发请求）。
     // 2 分钟内的实时明细最新且更全，保留；过期后由 state 快照接管，避免点过一次
@@ -865,12 +866,20 @@ async function loadLogs() {
   // 「最近 N 条」里根本不会有那些记录，必须让服务端按时间取。
   const rq = trangeQuery('reqRange', false);
   rq.set('limit', limit);
+  // 账号筛选走服务端（account 参数）：归档读取是先逐行过滤再取最近 N 条，
+  // 客户端过滤只能看到"最近 N 条里恰好属于该账号的"，老账号会凭空变空。
+  const reqAccountUid = $('reqAccount') ? $('reqAccount').value : '';
+  if (reqAccountUid) rq.set('account', reqAccountUid);
+  // 客户端兜底：归档关闭时后端只能回内存里的最近记录（不带 account 过滤），
+  // 这里按昵称再筛一遍，保证下拉框在两种部署形态下行为一致。
+  const reqAccountChoice = accountChoices().find(a => a.uid === reqAccountUid);
+  reqFilter.accountName = reqAccountChoice ? reqAccountChoice.name : '';
   try {
     const [d, metrics, requestRows, credit] = await Promise.all([
       api('logs'),
       api('request_metrics').catch(() => ({})),
       api('request_logs?' + rq.toString()).catch(() => ({ entries: [] })),
-      api('credit_history?limit=' + creditLimitValue()).catch(() => null),
+      api('credit_history?' + creditQuery().toString()).catch(() => null),
     ]);
     // 归档开启时以归档为准——「区间内没有记录」是一个真实结果，不能回落成内存里
     // 的最近 100 条（那会把筛选条件之外、时间范围之外的请求显示出来）。
@@ -981,9 +990,41 @@ function creditLimitValue() {
   const n = el ? Number(el.value) : 100;
   return n === 300 || n === 1000 ? n : 100;
 }
+
+/* accountChoices 账号下拉的数据源（overview 的账号快照，只取展示字段）。 */
+function accountChoices() {
+  return ((overviewData && overviewData.accounts) || []).map(a => ({ uid: a.uid, name: a.nickname || a.uid }));
+}
+
+/* fillAccountSelect 重建账号下拉：保留当前选择；选中账号已删除时回退「全部账号」。 */
+function fillAccountSelect(id) {
+  const el = $(id);
+  if (!el) return;
+  const choices = accountChoices();
+  const cur = el.value;
+  el.innerHTML = '<option value="">全部账号</option>' +
+    choices.map(a => '<option value="' + esc(a.uid) + '">' + esc(a.name) + '</option>').join('');
+  el.value = choices.some(a => a.uid === cur) ? cur : '';
+}
+
+/* ensureAccountSelects overview 刷新后同步两处账号下拉（覆盖账号增删与选中回退）。 */
+function ensureAccountSelects() {
+  fillAccountSelect('reqAccount');
+  fillAccountSelect('creditAccount');
+}
+
+/* creditQuery 积分历史查询串：条数 + 账号 + 时间范围（默认「全部历史」，与改造前一致）。 */
+function creditQuery() {
+  const q = trangeQuery('creditRange', false);
+  q.set('limit', String(creditLimitValue()));
+  const uid = $('creditAccount') ? $('creditAccount').value : '';
+  if (uid) q.set('uid', uid);
+  return q;
+}
+
 async function loadCreditHistory() {
   let d = null;
-  try { d = await api('credit_history?limit=' + creditLimitValue()); } catch (e) { d = null; }
+  try { d = await api('credit_history?' + creditQuery().toString()); } catch (e) { d = null; }
   renderCreditHistory(d);
 }
 
@@ -992,6 +1033,7 @@ async function loadCreditHistory() {
 function reqMatch(e, f) {
   f = f || reqFilter;
   if (f.outcome && String(e && e.outcome || '') !== f.outcome) return false;
+  if (f.accountName && String(e && e.account || '') !== f.accountName) return false;
   if (f.q) {
     const text = [e && e.client_ip, e && e.user_agent, e && e.model, e && e.account, e && e.request_id]
       .filter(Boolean).join(' ').toLowerCase();
@@ -1072,11 +1114,15 @@ if ($('reqOutcome')) $('reqOutcome').onchange = () => {
   renderRequestTable();
 };
 if ($('reqLimit')) $('reqLimit').onchange = loadLogs;
+if ($('reqAccount')) $('reqAccount').onchange = loadLogs;
 if ($('btnReqReload')) $('btnReqReload').onclick = loadLogs;
 // 时间范围：默认「全部历史」——请求记录页的历史行为就是"取最近 N 条"，
 // 加一个默认收窄的区间会让打开页面时看到的条数凭空变少。
 if ($('reqRange')) trangeBind('reqRange', loadLogs, '0');
 if ($('creditLimit')) $('creditLimit').onchange = loadCreditHistory;
+if ($('creditAccount')) $('creditAccount').onchange = loadCreditHistory;
+// 积分历史同样默认「全部历史」：与改造前"最近 N 条"的口径一致。
+if ($('creditRange')) trangeBind('creditRange', loadCreditHistory, '0');
 if ($('btnCreditReload')) $('btnCreditReload').onclick = loadCreditHistory;
 
 function requestLogText(e) {
